@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Bioluminescence Image Analysis Tool
 Run on your laptop to analyze images from experiment folders.
@@ -316,6 +316,12 @@ def _measure_job_worker(job_id, data):
                 if ts:
                     prev_ts = ts
 
+                if frame.get("elapsed_min") is not None:
+                    try:
+                        elapsed_min = float(frame.get("elapsed_min"))
+                    except (TypeError, ValueError):
+                        pass
+
                 frame_label = f"frame {frame_idx + 1} of {len(valid_frames)}"
                 frame_base = frame_idx * len(rois)
 
@@ -334,7 +340,7 @@ def _measure_job_worker(job_id, data):
                 frame_results = measure_nef(frame["nef"], rois, jpeg_size, progress_callback=progress)
                 for m in frame_results:
                     m["frame_number"] = int(frame.get("frame", frame_idx + 1))
-                    m["frame_index"] = frame_idx
+                    m["frame_index"] = int(frame.get("frame_index", frame_idx))
                     m["elapsed_min"] = float(elapsed_min)
                     m["frame_stem"] = stem
                     m["nef_path"] = frame.get("nef", "")
@@ -664,10 +670,16 @@ def measure_stack():
             if ts:
                 prev_ts = ts
 
+            if frame.get("elapsed_min") is not None:
+                try:
+                    elapsed_min = float(frame.get("elapsed_min"))
+                except (TypeError, ValueError):
+                    pass
+
             frame_results = measure_nef(frame["nef"], rois, jpeg_size)
             for m in frame_results:
                 m["frame_number"] = int(frame.get("frame", idx + 1))
-                m["frame_index"] = idx
+                m["frame_index"] = int(frame.get("frame_index", idx))
                 m["elapsed_min"] = float(elapsed_min)
                 m["frame_stem"] = stem
                 m["nef_path"] = frame.get("nef", "")
@@ -2619,11 +2631,30 @@ HTML_PAGE = """<!DOCTYPE html>
     return hh * 3600 + mm * 60 + ss;
   }
 
-  async function measureStackFramesWithProgress(scaledRois, currentFrameOnly) {
-    let frames = (biolumPair.frames || [])
+
+  function stackFramesWithElapsed(frames) {
+    const sorted = (frames || [])
       .filter(f => f.nef)
       .slice()
       .sort((a, b) => (a.frame || 0) - (b.frame || 0));
+    if (!sorted.length) return [];
+    const baseTs = frameTimestampSeconds(sorted[0].stem);
+    let prevTs = baseTs;
+    let dayOffset = 0;
+    return sorted.map((frame, idx) => {
+      const ts = frameTimestampSeconds(frame.stem);
+      let elapsedMin = 0;
+      if (idx > 0 && baseTs !== null && ts !== null) {
+        if (prevTs !== null && ts < prevTs) dayOffset += 1;
+        elapsedMin = (ts - baseTs + dayOffset * 24 * 3600) / 60;
+      }
+      if (ts !== null) prevTs = ts;
+      return {...frame, frame_index: idx, elapsed_min: elapsedMin};
+    });
+  }
+
+  async function measureStackFramesWithProgress(scaledRois, currentFrameOnly) {
+    let frames = stackFramesWithElapsed(biolumPair.frames || []);
     if (!frames.length) throw new Error('No NEF files found in stack');
     if (currentFrameOnly) {
       // match by stem, not frame number — frame numbers parsed from filenames aren't
@@ -3120,7 +3151,13 @@ HTML_PAGE = """<!DOCTYPE html>
 
   function summaryGroupKey(d) { return renameMode ? (d.roiLabel || d.sample) : d.sample; }
   function hasTimeSeriesData() {
-    return analysisData.some(d => d.elapsed_min !== undefined && d.elapsed_min !== null && isFinite(d.elapsed_min));
+    const times = new Set(
+      analysisData
+        .map(d => d.elapsed_min)
+        .filter(v => v !== undefined && v !== null && isFinite(v))
+        .map(v => Number(v).toFixed(6))
+    );
+    return times.size >= 2;
   }
   function timeSeriesKey(d) {
     return summaryGroupKey(d) || 'sample';
