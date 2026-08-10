@@ -39,13 +39,13 @@ pip install flask rawpy openpyxl numpy pillow
 7. Still in the same Command Prompt window, navigate to the extracted repository folder:
 
 ```bash
-cd "C:\Users\Your_User_Name\Downloads\Bioluminescence-main"
+cd "C:\Users\Your_User_Name\Downloads\BioLum-main\BioLum-main\4.BioLum_Analyzer"
 ```
 
 8. Still in the same Command Prompt window, start the application:
 
 ```bash
-python biolum_analysis.py
+python biolum_analyzer.py
 ```
 
 9. The GUI will open in your web browser at:
@@ -79,7 +79,7 @@ Sample_01.jpg
 
 - The GUI opens in the **Measurement** tab.
 - Use the folder picker to navigate to the folder containing your files.
-- Click a day or bioluminescence file to load it into the image viewer.
+- Click a day or bioluminescence file/timelpase stack (TL) to load it into the image viewer.
 - Load the matching day/bioluminescence pair.
 - NB! The GUI only allows files with the same sample name to be paired, preventing mix-ups.
 - To load a different sample, clear the current images from the viewer by clicking the **X Clear** buttons located in the top-right corner of each image.
@@ -104,6 +104,12 @@ Sample_01.jpg
 
 ---
 
+## Range Indicator
+
+- Toggle the **Range indicator** check box to see color coded pixel saturation map: intensity of blue and red pixels are below and above quantitative range respectively, grayscale pixels are quantitative. NB! Intensity range for each pixel is computed on .nef file and takes a few seconds.
+
+---
+
 ## Background Measurement
 
 - Click the **BCKG** button to draw ROIs for background signal measurement.
@@ -118,6 +124,8 @@ Sample_01.jpg
 - Click **Save Results** to save:
   - The measurement table
   - A snapshot of the image with ROIs overlaid
+ 
+- For a time-lapse stack select between analyzing the complete stack or only the shown frame by toggling the check box **This frame only** to the right from the frame scroller
 
 ---
 
