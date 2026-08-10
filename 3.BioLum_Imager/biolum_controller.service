@@ -1,0 +1,13 @@
+[Unit]
+Description=Biolum Camera Controller
+After=network.target
+
+[Service]
+User=biolum
+WorkingDirectory=/home/biolum
+ExecStart=/usr/bin/python3 /home/biolum/biolum_imager.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

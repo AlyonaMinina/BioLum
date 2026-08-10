@@ -1,0 +1,73 @@
+{
+  "stem": "AM 117_biolum_180sec_163653",
+  "jpeg_size": [
+    7360,
+    4912
+  ],
+  "rois": [
+    {
+      "x": 4019,
+      "y": 1230,
+      "w": 291,
+      "h": 300,
+      "shape": "circle",
+      "type": "bckg"
+    },
+    {
+      "x": 5046,
+      "y": 1412,
+      "w": 364,
+      "h": 300,
+      "shape": "circle",
+      "type": "bckg"
+    },
+    {
+      "x": 2438,
+      "y": 2393,
+      "w": 264,
+      "h": 263,
+      "shape": "circle",
+      "type": "bckg"
+    },
+    {
+      "x": 5649,
+      "y": 2798,
+      "w": 248,
+      "h": 243,
+      "shape": "circle",
+      "type": "roi"
+    },
+    {
+      "x": 5278,
+      "y": 3014,
+      "w": 256,
+      "h": 256,
+      "shape": "circle",
+      "type": "roi"
+    },
+    {
+      "x": 6051,
+      "y": 3033,
+      "w": 214,
+      "h": 355,
+      "shape": "circle",
+      "type": "roi"
+    },
+    {
+      "x": 2447,
+      "y": 3337,
+      "w": 364,
+      "h": 318,
+      "shape": "circle",
+      "type": "bckg"
+    },
+    {
+      "x": 5558,
+      "y": 3489,
+      "w": 431,
+      "h": 110,
+      "shape": "circle",
+      "type": "roi"
+    }
+  ]
+}
