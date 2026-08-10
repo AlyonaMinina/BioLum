@@ -2,11 +2,10 @@
 This is a web-based Graphical User Interface (GUI) for quick and convenient quantitative detection of multicolored bioluminescence in plants. The GUI is designed to process images acquired using our Biolum imaging system based on a Nikon D800 camera controlled by a Raspberry Pi 4.
 
 <p align="center">
-   <img src="Previews/Measurment%20tab%20preview.png" width="80%" />
-   <img src="Previews/Analysis%20tab%20preview.png" width="80%" />
+   <img src="5.Docs/Previews/BioLum Analyzer preview 1.png" width="50%" />
+   <img src="5.Docs/Previews/BioLum Analyzer preview 2.png" width="50%" />
+   <img src="5.Docs/Previews/BioLum Analyzer preview 3.png" width="50%" />
 </p>
-
-
 
 <details>
 <summary><h1>🫖 Installation</h1></summary>
