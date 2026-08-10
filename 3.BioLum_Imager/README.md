@@ -17,11 +17,12 @@ The system comprises:
   - day images
   - bioluminescence images
 - File preview and download through the web GUI
-- Automatic timestamping of images to prevent overwriting
+- Automatic time stamping of images to prevent overwriting
 - Currently supports acquisition of:
-  - 1 day image
-  - 1 bioluminescence image
-- Timelapse acquisition is not yet implemented
+  - individually taken "day" image
+  - individually taken bioluminescence image
+  - day + bioluminescence images taken as a pair
+  - timelapse acquisition of bioluminescence at user-defined exposure and intervals between frames
 
 ---
 
@@ -29,7 +30,7 @@ The system comprises:
 
 <details> <summary> <H2>🫖 Accessing the GUI </H2> </summary>
 
-To have continous access to the GUI, it has to automatically start and run continuously on the Raspberry Pi:
+To have continuous access to the GUI, it has to automatically start and run continuously on the Raspberry Pi:
 
 ### 1. Copy the `biolum_controller.service` file to the Raspberry Pi
 
