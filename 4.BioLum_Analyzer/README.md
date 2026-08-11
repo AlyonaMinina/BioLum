@@ -3,7 +3,6 @@ This is a web-based Graphical User Interface (GUI) for quick and convenient quan
 
 <p align="center">
    <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_1.png?raw=true" width="50%" />
-   <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_2.png?raw=true" width="50%" />
    <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_3.png?raw=true" width="50%" />
 </p>
 
@@ -100,12 +99,13 @@ Sample_01.jpg
 - Use the mouse wheel to zoom in/out.
 - Use the **Pan** button to move around the image.
 - Click **Fit** to resize the image to fit the viewer window.
+- ROIs can be given custom names after checking rename ROIs check box. ROIs with the same name will be treated as replicates
 
 ---
 
 ## Range Indicator
 
-- Toggle the **Range indicator** check box to see color coded pixel saturation map: intensity of blue and red pixels are below and above quantitative range respectively, grayscale pixels are quantitative. NB! Intensity range for each pixel is computed on .nef file and takes a few seconds.
+- Toggle the **Range indicator** check box to see color coded pixel saturation map: pixels with intensity reaching max value in any of the RGB channels are highlighted in red. NB! Intensity range for each pixel is computed on .nef file and takes a few seconds.
 
 ---
 
