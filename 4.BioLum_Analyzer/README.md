@@ -3,9 +3,9 @@ This is a web-based Graphical User Interface (GUI) for quick and convenient quan
 
 <p align="center">
    <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_1.png?raw=true" width="50%" />
-      <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_2.png?raw=true" width="50%" />
-<img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_3.png?raw=true" width="50%" />
-     <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_4.png?raw=true" width="50%" />
+   <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_2.png?raw=true" width="50%" />
+   <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_3.png?raw=true" width="50%" />
+   <img src="https://github.com/AlyonaMinina/BioLum/blob/main/5.Docs/Previews/BioLum_Analyzer_preview_4.png?raw=true" width="50%" />
 
 </p>
 
