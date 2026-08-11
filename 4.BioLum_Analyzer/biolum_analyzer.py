@@ -142,13 +142,12 @@ def polygon_mask(points, w, h):
         j = i
     return inside
 
-def compute_range_indicator_png(nef_path, max_dim=1600):
+def compute_range_indicator_png(nef_path, preview_path=None, max_dim=1600):
     """
-    Build an exposure-check preview from a NEF: pixels clipped at the sensor's true
-    16-bit max (65535) are marked red, pixels at true black (0) are marked blue,
-    everything else is rendered greyscale so structure in the valid range stays visible.
-    Uses the same rawpy postprocess settings as measure_nef (linear, no auto-bright)
-    so the clip/black thresholds line up with what's actually measured.
+    Build a user-facing exposure warning preview from a NEF.
+    The regular BIOLUM preview stays visible; pixels clipped at the 16-bit high end
+    are marked red. Dark pixels are left unchanged so normal low biolum background
+    does not look like a warning.
     """
     import rawpy
     from PIL import Image
@@ -161,15 +160,28 @@ def compute_range_indicator_png(nef_path, max_dim=1600):
             gamma=(1, 1),
         )
 
-    ch_max = rgb.max(axis=2)
-    ch_min = rgb.min(axis=2)
-    over = ch_max >= 65535
-    under = (ch_min <= 0) & ~over
+    clipped = rgb.max(axis=2) >= 65535
 
-    grey = (rgb.astype(np.float64).mean(axis=2) / 65535.0 * 255.0).astype(np.uint8)
-    out = np.stack([grey, grey, grey], axis=-1)
-    out[over] = (255, 40, 40)
-    out[under] = (40, 120, 255)
+    if preview_path and Path(preview_path).exists():
+        img = Image.open(preview_path).convert('RGB')
+        base = np.array(img, dtype=np.uint8)
+    else:
+        # Fallback when no JPEG preview is available: make a gentle display image
+        # from the same raw data, then apply the same red warning overlay.
+        vals = rgb.astype(np.float32)
+        hi = np.percentile(vals, 99.8)
+        if hi <= 0:
+            hi = 1.0
+        base = np.clip(vals / hi * 255.0, 0, 255).astype(np.uint8)
+        img = Image.fromarray(base, 'RGB')
+
+    if clipped.shape[:2] != base.shape[:2]:
+        mask_img = Image.fromarray(clipped.astype(np.uint8) * 255, 'L')
+        mask_img = mask_img.resize((base.shape[1], base.shape[0]), Image.NEAREST)
+        clipped = np.array(mask_img) > 0
+
+    out = base.copy()
+    out[clipped] = (255, 35, 35)
 
     img = Image.fromarray(out, 'RGB')
     if max_dim and max(img.width, img.height) > max_dim:
@@ -618,7 +630,8 @@ def range_image():
     if not path or not Path(path).exists():
         return "", 404
     try:
-        png_bytes = compute_range_indicator_png(path)
+        preview = request.args.get("preview", "")
+        png_bytes = compute_range_indicator_png(path, preview_path=preview)
         return Response(png_bytes, mimetype="image/png")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1516,7 +1529,7 @@ HTML_PAGE = """<!DOCTYPE html>
             <input type="checkbox" id="rename-mode" onchange="toggleRenameMode()">
             Rename ROIs
           </label>
-          <label class="checkbox-row" style="flex-shrink:0;" title="Show clipped highlights (red) and true black (blue) from the raw NEF, greyscale in range">
+          <label class="checkbox-row" style="flex-shrink:0;" title="Show red warning overlay on saturated BIOLUM pixels">
             <input type="checkbox" id="range-indicator" onchange="toggleRangeIndicator()">
             Range indicator
           </label>
@@ -1785,12 +1798,14 @@ HTML_PAGE = """<!DOCTYPE html>
     savePromptShown = false;
   }
 
-  // Picks the image URL to display for a pair: the raw-derived range-indicator
-  // overlay when requested and a NEF is available, otherwise the plain JPEG.
+  // Picks the image URL to display for a pair: the normal JPEG preview with
+  // a red high-clipping warning overlay when range indicator is requested.
   function imageSrcFor(pair, useRange) {
     if (!pair) return '';
     if (useRange && pair.nef) {
-      return '/range_image?path=' + encodeURIComponent(pair.nef) + '&t=' + Date.now();
+      let src = '/range_image?path=' + encodeURIComponent(pair.nef);
+      if (pair.jpg) src += '&preview=' + encodeURIComponent(pair.jpg);
+      return src + '&t=' + Date.now();
     }
     return pair.jpg ? '/image?path=' + encodeURIComponent(pair.jpg) : '';
   }
@@ -1811,8 +1826,10 @@ HTML_PAGE = """<!DOCTYPE html>
     const src = imageSrcFor(pair, useRange);
     if (!src) return;
 
-    if (useRange && pair.nef && rangeImageCache.has(pair.nef)) {
-      biolumImg = rangeImageCache.get(pair.nef);
+    const cacheKey = useRange && pair.nef ? pair.nef + '|' + (pair.jpg || '') : '';
+
+    if (useRange && cacheKey && rangeImageCache.has(cacheKey)) {
+      biolumImg = rangeImageCache.get(cacheKey);
       return;
     }
 
@@ -1822,7 +1839,7 @@ HTML_PAGE = """<!DOCTYPE html>
     }
     try {
       const img = await loadImageObject(src, useRange);
-      if (useRange && pair.nef) rangeImageCache.set(pair.nef, img);
+      if (useRange && cacheKey) rangeImageCache.set(cacheKey, img);
       if (which === 'day') dayImg = img; else biolumImg = img;
     } catch (err) {
       if (!useRange) throw err;
@@ -1844,7 +1861,8 @@ HTML_PAGE = """<!DOCTYPE html>
       rangeIndicatorOn = false;
       return;
     }
-    const cachedRange = rangeIndicatorOn && biolumPair?.nef && rangeImageCache.has(biolumPair.nef);
+    const rangeKey = biolumPair?.nef ? biolumPair.nef + '|' + (biolumPair.jpg || '') : '';
+    const cachedRange = rangeIndicatorOn && rangeKey && rangeImageCache.has(rangeKey);
     setStatus(rangeIndicatorOn
       ? cachedRange ? 'Range indicator on for BIOLUM (cached)' : 'Computing BIOLUM exposure range from NEF... (a few seconds)'
       : 'Range indicator off', '');
@@ -1852,7 +1870,7 @@ HTML_PAGE = """<!DOCTYPE html>
     drawAll();
     if (rangeIndicatorOn) {
       const cachedMsg = cachedRange ? 'cached; ' : '';
-      setStatus(`Range indicator on for BIOLUM - ${cachedMsg}red = clipped highlights, blue = true black, grey = in range`, 'ok');
+      setStatus(`Range indicator on for BIOLUM - ${cachedMsg}red = saturated pixels`, 'ok');
     }
   }
 
