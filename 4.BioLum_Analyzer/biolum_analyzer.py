@@ -375,7 +375,7 @@ def _measure_job_worker(job_id, data):
     except Exception as e:
         _job_update(job_id, status="error", error=str(e), message=f"Error: {e}")
 
-def save_results(folder, stem, rois, measurements, jpeg_size, snapshot_png="", save_dir=""):
+def save_results(folder, stem, rois, measurements, jpeg_size, snapshot_png="", save_dir="", run_stamp=""):
     """Save ROIs as JSON, snapshot PNG, and measurements as Excel."""
     if save_dir:
         analysis_dir = Path(save_dir)
@@ -383,6 +383,8 @@ def save_results(folder, stem, rois, measurements, jpeg_size, snapshot_png="", s
     else:
         analysis_dir = Path(folder) / f"Analysis_{datetime.now().strftime('%Y%m%d_%H%M')}"
         analysis_dir.mkdir(parents=True, exist_ok=True)
+    run_stamp = run_stamp or datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_snapshot_name = ""
 
     # Save ROIs
     roi_file = analysis_dir / f"{stem}_rois.json"
@@ -395,9 +397,12 @@ def save_results(folder, stem, rois, measurements, jpeg_size, snapshot_png="", s
         img_bytes = base64.b64decode(snapshot_png.split(',', 1)[1])
         with open(analysis_dir / f"{stem}_snapshot.png", 'wb') as f:
             f.write(img_bytes)
+        run_snapshot_name = f"{stem}_{run_stamp}_snapshot.png"
+        with open(analysis_dir / run_snapshot_name, 'wb') as f:
+            f.write(img_bytes)
 
     if not measurements:
-        return str(analysis_dir)
+        return {"dir": str(analysis_dir), "run_xlsx": "", "run_snapshot": run_snapshot_name}
 
     # Excel
     from openpyxl import Workbook, load_workbook
@@ -502,8 +507,10 @@ def save_results(folder, stem, rois, measurements, jpeg_size, snapshot_png="", s
     ws.auto_filter.ref = ws.dimensions
 
     wb.save(xlsx_file)
+    run_xlsx_name = f"{stem}_{run_stamp}_measurements.xlsx"
+    wb.save(analysis_dir / run_xlsx_name)
 
-    return str(analysis_dir)
+    return {"dir": str(analysis_dir), "run_xlsx": run_xlsx_name, "run_snapshot": run_snapshot_name}
 
 # ── routes ────────────────────────────────────────────────────────────────────
 
@@ -730,11 +737,13 @@ def save():
     session_measurements = data.get("session_measurements") or measurements
     jpeg_size = data.get("jpeg_size", [1, 1])
     snapshot_png = data.get("snapshot_png", "")
+    run_stamp = data.get("run_stamp") or datetime.now().strftime('%Y%m%d_%H%M%S')
 
     try:
-        out_dir = save_results(folder, stem, rois, session_measurements, jpeg_size,
-                               snapshot_png, save_dir=save_dir)
-        return jsonify({"ok": True, "dir": out_dir})
+        saved = save_results(folder, stem, rois, session_measurements, jpeg_size,
+                             snapshot_png, save_dir=save_dir, run_stamp=run_stamp)
+        saved.update({"ok": True, "run_stamp": run_stamp, "chart_pdf": f"{stem}_{run_stamp}_summary.pdf"})
+        return jsonify(saved)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -744,7 +753,7 @@ def save_pdf():
     data = request.get_json()
     save_dir = data.get("dir", "")
     pdf_data = data.get("pdf_data", "")
-    filename = data.get("filename", "biolum_summary.pdf")
+    filename = Path(data.get("filename", "biolum_summary.pdf")).name or "biolum_summary.pdf"
     if not save_dir or not pdf_data:
         return jsonify({"ok": False, "error": "Missing dir or pdf_data"})
     try:
@@ -2575,7 +2584,10 @@ HTML_PAGE = """<!DOCTYPE html>
     sessionMeasurements = sessionMeasurements.filter(m => m.sample_name !== curSample);
     sessionMeasurements.push(...measurements);
 
-    // accumulate for Analysis Summary (non-background ROIs only)
+    // keep Analysis Summary in sync with the latest run for this sample
+    analysisData = analysisData.filter(d => d.sample !== curSample);
+    summarySampleOrder = summarySampleOrder.filter(name => name !== curSample);
+
     measurements.filter(m => m.roi_type !== 'bckg').forEach(m => {
       const uid = analysisDataUid++;
       m._uid = uid;
@@ -2596,6 +2608,7 @@ HTML_PAGE = """<!DOCTYPE html>
     });
 
     renderTable(measurements);
+    renderSummary();
     unsavedResults = true;
     savePromptShown = false;
     setStatus(currentFrameOnly
@@ -2879,6 +2892,11 @@ HTML_PAGE = """<!DOCTYPE html>
     return biolumPair ? biolumPair.stem : (dayPair ? dayPair.stem : 'analysis');
   }
 
+  function timestampForFilename(d=new Date()) {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  }
+
   function scaledRoisForSave() {
     syncRoiLabelsFromInputs();
     ensureRoiNumbers();
@@ -2924,6 +2942,7 @@ HTML_PAGE = """<!DOCTYPE html>
     const scaledRois = scaledRoisForSave();
 
     const saveStem = analysisStem();
+    const runStamp = timestampForFilename();
     const snapshot_png = captureSnapshotDataURL() || '';
     setStatus('Saving...', '');
     const r = await fetch('/save', {
@@ -2937,6 +2956,7 @@ HTML_PAGE = """<!DOCTYPE html>
         session_measurements: sessionMeasurements,
         jpeg_size: [jpegSize.w, jpegSize.h],
         snapshot_png,
+        run_stamp: runStamp,
       })
     });
     const data = await r.json();
@@ -2945,11 +2965,26 @@ HTML_PAGE = """<!DOCTYPE html>
       unsavedResults = false;
       savePromptShown = false;
       setStatus('Saved to: ' + data.dir, 'ok');
+      const chartName = data.chart_pdf || `${saveStem}_${runStamp}_summary.pdf`;
+      const pdfSaved = await exportSummaryPDF(data.dir, chartName, true);
       const links = document.getElementById('download-links');
+      const latestPath = fixPath(data.dir) + '/session_measurements.xlsx';
+      const runPath = data.run_xlsx ? fixPath(data.dir) + '/' + data.run_xlsx : latestPath;
+      const chartPath = fixPath(data.dir) + '/' + chartName;
+      const chartLink = (pdfSaved && pdfSaved.ok) ? `
+        <a href="/download?path=${encodeURIComponent(chartPath)}"
+           style="font-family:var(--mono);font-size:10px;color:var(--text);text-decoration:none;border:1px solid var(--border2);padding:2px 8px;border-radius:2px;">
+           Chart PDF</a>` : '';
       links.innerHTML = `
-        <a href="/download?path=${encodeURIComponent(fixPath(data.dir) + '/session_measurements.xlsx')}"
+        <a href="/download?path=${encodeURIComponent(latestPath)}"
            style="font-family:var(--mono);font-size:10px;color:var(--amber);text-decoration:none;border:1px solid var(--border2);padding:2px 8px;border-radius:2px;">
-           ↓ Excel</a>`;
+           Latest Excel</a>
+        <a href="/download?path=${encodeURIComponent(runPath)}"
+           style="font-family:var(--mono);font-size:10px;color:var(--accent);text-decoration:none;border:1px solid var(--border2);padding:2px 8px;border-radius:2px;">
+           Run Excel</a>${chartLink}`;
+      if (pdfSaved && pdfSaved.ok === false) {
+        setStatus('Saved Excel; chart PDF failed: ' + (pdfSaved.error || 'unknown error'), 'wrn');
+      }
     } else {
       setStatus('Save failed: ' + data.error, 'err');
     }
@@ -3799,9 +3834,15 @@ HTML_PAGE = """<!DOCTYPE html>
 
   }
 
-  async function exportSummaryPDF() {
-    if (!analysisData.length) { setStatus('No data to export', 'wrn'); return; }
-    if (!window.jspdf) { setStatus('PDF library not loaded', 'wrn'); return; }
+  async function exportSummaryPDF(saveDir=null, filename='biolum_summary.pdf', quiet=false) {
+    if (!analysisData.length) {
+      if (!quiet) setStatus('No data to export', 'wrn');
+      return {ok: false, error: 'No data to export'};
+    }
+    if (!window.jspdf) {
+      if (!quiet) setStatus('PDF library not loaded', 'wrn');
+      return {ok: false, error: 'PDF library not loaded'};
+    }
     const useTimeSeries = hasTimeSeriesData();
     const groups = summaryGroups(useTimeSeries);
     const showRatio = document.getElementById('summary-show-ratio')?.checked ?? false;
@@ -3855,17 +3896,22 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     const pdfDataUrl = pdf.output('datauristring');
-    if (lastSaveDir) {
+    const targetDir = saveDir || lastSaveDir;
+    if (targetDir) {
       const r = await fetch('/save_pdf', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({dir: lastSaveDir, pdf_data: pdfDataUrl, filename: 'biolum_summary.pdf'})
+        body: JSON.stringify({dir: targetDir, pdf_data: pdfDataUrl, filename})
       });
       const d = await r.json();
-      if (d.ok) setStatus('PDF saved: ' + d.path, 'ok');
-      else setStatus('PDF save failed: ' + d.error, 'err');
+      if (!quiet) {
+        if (d.ok) setStatus('PDF saved: ' + d.path, 'ok');
+        else setStatus('PDF save failed: ' + d.error, 'err');
+      }
+      return d;
     } else {
-      pdf.save('biolum_summary.pdf');
-      setStatus('PDF downloaded — save measurements first to write to folder', 'wrn');
+      pdf.save(filename);
+      if (!quiet) setStatus('PDF downloaded - save measurements first to write to folder', 'wrn');
+      return {ok: true};
     }
   }
 
