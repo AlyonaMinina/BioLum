@@ -1,0 +1,129 @@
+{
+  "stem": "injected_40sec_timelapse",
+  "jpeg_size": [
+    7360,
+    4912
+  ],
+  "rois": [
+    {
+      "x": 802,
+      "y": 1309,
+      "w": 368,
+      "h": 368,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 1,
+      "label": "Reference"
+    },
+    {
+      "x": 323,
+      "y": 1677,
+      "w": 352,
+      "h": 352,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 2,
+      "label": "Reference"
+    },
+    {
+      "x": 112,
+      "y": 2293,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 3,
+      "label": "Reference"
+    },
+    {
+      "x": 4803,
+      "y": 1037,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 4,
+      "label": "Reference"
+    },
+    {
+      "x": 4444,
+      "y": 1325,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 5,
+      "label": "Reference"
+    },
+    {
+      "x": 4191,
+      "y": 1678,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 6,
+      "label": "Reference"
+    },
+    {
+      "x": 1967,
+      "y": 2834,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 7,
+      "label": "Reporter"
+    },
+    {
+      "x": 1758,
+      "y": 3537,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 8,
+      "label": "Reporter"
+    },
+    {
+      "x": 2190,
+      "y": 3218,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 9,
+      "label": "Reporter"
+    },
+    {
+      "x": 5931,
+      "y": 2564,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 10,
+      "label": "Reporter"
+    },
+    {
+      "x": 6056,
+      "y": 3414,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 11,
+      "label": "Reporter"
+    },
+    {
+      "x": 6415,
+      "y": 2902,
+      "w": 372,
+      "h": 372,
+      "shape": "circle",
+      "type": "roi",
+      "roi_number": 12,
+      "label": "Reporter"
+    }
+  ]
+}

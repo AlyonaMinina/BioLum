@@ -1095,11 +1095,24 @@ HTML_PAGE = """<!DOCTYPE html>
     /* ── canvas area ── */
     .canvas-area {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 2px;
+      grid-template-columns: 1fr 6px 1fr;
+      gap: 0;
       background: var(--border);
       overflow: hidden;
       position: relative;
+    }
+
+    .canvas-splitter {
+      background:
+        linear-gradient(90deg, transparent 0 2px, var(--border2) 2px 4px, transparent 4px 6px);
+      cursor: col-resize;
+      position: relative;
+      z-index: 20;
+    }
+    .canvas-splitter:hover,
+    .canvas-splitter.dragging {
+      background:
+        linear-gradient(90deg, transparent 0 2px, var(--accent) 2px 4px, transparent 4px 6px);
     }
 
     .canvas-wrap {
@@ -1227,6 +1240,7 @@ HTML_PAGE = """<!DOCTYPE html>
       max-height: 100%;
       cursor: crosshair;
       display: block;
+      touch-action: none;
     }
 
     .no-image {
@@ -1473,6 +1487,7 @@ HTML_PAGE = """<!DOCTYPE html>
           <button class="canvas-clear-btn" id="day-clear-btn" onclick="clearPanel('day')" style="display:none;" title="Clear day image">✕ Clear</button>
           <div class="canvas-sample" id="day-sample-label" style="display:none;"></div>
         </div>
+        <div class="canvas-splitter" id="canvas-splitter" title="Resize DAY / BIOLUM panels"></div>
         <div class="canvas-wrap" id="biolum-wrap">
           <div class="canvas-label">BIOLUM</div>
           <div class="no-image" id="biolum-placeholder">
@@ -1528,6 +1543,10 @@ HTML_PAGE = """<!DOCTYPE html>
           <label class="checkbox-row" style="flex-shrink:0;">
             <input type="checkbox" id="rename-mode" onchange="toggleRenameMode()">
             Rename ROIs
+          </label>
+          <label class="checkbox-row" style="flex-shrink:0;">
+            <input type="checkbox" id="show-roi-labels" checked onchange="toggleRoiLabels()">
+            Show #
           </label>
           <label class="checkbox-row" style="flex-shrink:0;" title="Show red warning overlay on saturated BIOLUM pixels">
             <input type="checkbox" id="range-indicator" onchange="toggleRangeIndicator()">
@@ -1645,9 +1664,11 @@ HTML_PAGE = """<!DOCTYPE html>
   let roiType = 'roi';
   let fixedSize = null;
   const MIN_ROI_SIZE = 0.5; // minimum ROI width/height, in day-image pixel space (pre zoom) — zoom in for finer control
+  const FREEHAND_COMMIT_DELAY_MS = 1100;
   let isDrawing = false;
   let isDrawingFreehand = false;
   let freehandPoints = [];
+  let freehandCommitTimer = null;
   let drawStart = {x:0, y:0};
   let dragStart = {x:0, y:0};
   let dragRoiStart = null;
@@ -1656,6 +1677,7 @@ HTML_PAGE = """<!DOCTYPE html>
   let analysisDataUid = 0;
   let summarySampleOrder = [];
   let renameMode = false;
+  let showRoiLabels = true;
   let lastSaveDir = null;
   let sessionMeasurements = [];
   let roiAutosaveTimer = null;
@@ -1691,6 +1713,7 @@ HTML_PAGE = """<!DOCTYPE html>
   let dayImg = null;
   let biolumImg = null;
   let biolumFrameIndex = 0;
+  installCanvasSplitter();
 
   // ROI colours
   const ROI_COLORS = ['#4af0c4','#f0c44a','#f04a6a','#a04af0','#4a80f0','#f0804a'];
@@ -2006,6 +2029,94 @@ HTML_PAGE = """<!DOCTYPE html>
     document.getElementById(placeholderId).style.display = 'none';
   }
 
+  function fitCanvasToImage(canvas, img) {
+    if (!img || !canvas.parentElement) return {oldW: canvas.width, oldH: canvas.height, newW: canvas.width, newH: canvas.height};
+    const wrap = canvas.parentElement;
+    const maxW = Math.max(1, wrap.clientWidth);
+    const maxH = Math.max(1, wrap.clientHeight);
+    const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+    const oldW = canvas.width;
+    const oldH = canvas.height;
+    const newW = Math.max(1, Math.round(img.naturalWidth * scale));
+    const newH = Math.max(1, Math.round(img.naturalHeight * scale));
+    if (oldW !== newW || oldH !== newH) {
+      canvas.width = newW;
+      canvas.height = newH;
+    }
+    return {oldW, oldH, newW, newH};
+  }
+
+  function scaleRoisForCanvasResize(oldW, oldH, newW, newH) {
+    if (!oldW || !oldH || (oldW === newW && oldH === newH)) return;
+    const sx = newW / oldW;
+    const sy = newH / oldH;
+    rois.forEach(r => {
+      r.x *= sx; r.y *= sy; r.w *= sx; r.h *= sy;
+      if (r.points) r.points = r.points.map(p => ({x: p.x * sx, y: p.y * sy}));
+    });
+    view.dx *= sx;
+    view.dy *= sy;
+    if (drawStart) { drawStart.x *= sx; drawStart.y *= sy; }
+    if (dragStart) { dragStart.x *= sx; dragStart.y *= sy; }
+    scheduleRoiAutosave();
+  }
+
+  function refitCanvasesAfterPanelResize() {
+    const refBefore = roiReferenceCanvas();
+    const oldRefW = refBefore ? refBefore.width : 0;
+    const oldRefH = refBefore ? refBefore.height : 0;
+    fitCanvasToImage(dayCanvas, dayImg);
+    fitCanvasToImage(biolumCanvas, biolumImg);
+    const refAfter = roiReferenceCanvas();
+    if (refAfter && oldRefW && oldRefH) {
+      scaleRoisForCanvasResize(oldRefW, oldRefH, refAfter.width, refAfter.height);
+    }
+    drawAll();
+    if (rois.length && !measurements.some(m => m.mean_B !== null && m.mean_B !== undefined)) {
+      renderRoiSetupTable();
+    }
+  }
+
+  function setCanvasSplit(percentDay) {
+    const area = document.querySelector('.canvas-area');
+    if (!area) return;
+    const dayPct = Math.max(20, Math.min(80, percentDay));
+    area.style.gridTemplateColumns = `${dayPct}% 6px ${100 - dayPct}%`;
+  }
+
+  function installCanvasSplitter() {
+    const area = document.querySelector('.canvas-area');
+    const splitter = document.getElementById('canvas-splitter');
+    if (!area || !splitter) return;
+    let dragging = false;
+    const update = e => {
+      const rect = area.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      setCanvasSplit((x / rect.width) * 100);
+    };
+    splitter.addEventListener('pointerdown', e => {
+      dragging = true;
+      splitter.classList.add('dragging');
+      if (splitter.setPointerCapture) splitter.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    window.addEventListener('pointermove', e => {
+      if (!dragging) return;
+      update(e);
+    });
+    window.addEventListener('pointerup', e => {
+      if (!dragging) return;
+      dragging = false;
+      splitter.classList.remove('dragging');
+      if (splitter.releasePointerCapture) {
+        try { splitter.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+      update(e);
+      refitCanvasesAfterPanelResize();
+    });
+    window.addEventListener('resize', refitCanvasesAfterPanelResize);
+  }
+
   // ── ROI drawing ──
   function setMode(m) {
     mode = m;
@@ -2019,6 +2130,11 @@ HTML_PAGE = """<!DOCTYPE html>
 
   function resetView() {
     view = {scale: 1, dx: 0, dy: 0};
+    drawAll();
+  }
+
+  function toggleRoiLabels() {
+    showRoiLabels = document.getElementById('show-roi-labels')?.checked ?? true;
     drawAll();
   }
 
@@ -2151,7 +2267,32 @@ HTML_PAGE = """<!DOCTYPE html>
     return Math.abs(a / 2);
   }
 
+  function cancelPendingFreehandCommit() {
+    if (!freehandCommitTimer) return;
+    clearTimeout(freehandCommitTimer);
+    freehandCommitTimer = null;
+  }
+
+  function addFreehandPoint(pos) {
+    const last = freehandPoints[freehandPoints.length - 1];
+    const minStep = 1.5 / (view.scale || 1);
+    if (!last || Math.hypot(pos.x - last.x, pos.y - last.y) >= minStep) {
+      freehandPoints.push(pos);
+    }
+  }
+
+  function scheduleFreehandCommit() {
+    cancelPendingFreehandCommit();
+    freehandCommitTimer = setTimeout(() => {
+      freehandCommitTimer = null;
+      if (isDrawingFreehand && mode === 'draw' && roiShape === 'poly') {
+        commitFreehandRoi(freehandPoints);
+      }
+    }, FREEHAND_COMMIT_DELAY_MS);
+  }
+
   function commitFreehandRoi(points) {
+    cancelPendingFreehandCommit();
     if (points.length < 3) {
       setStatus('Freehand ROI needs at least 3 points — trace a bit further before releasing', 'err');
     } else {
@@ -2248,6 +2389,12 @@ HTML_PAGE = """<!DOCTYPE html>
     }
     if (!dayPair && !biolumPair) return;
     if (mode === 'draw' && roiShape === 'poly') {
+      if (isDrawingFreehand) {
+        cancelPendingFreehandCommit();
+        addFreehandPoint(pos);
+        drawAll(); drawFreehandPreview(freehandPoints);
+        return;
+      }
       const preHit = hitTest(pos.x, pos.y);
       if (preHit >= 0) { selectedRoi = preHit; drawAll(); return; }
       isDrawingFreehand = true; freehandPoints = [pos]; selectedRoi = -1;
@@ -2278,13 +2425,9 @@ HTML_PAGE = """<!DOCTYPE html>
       drawAll(); return;
     }
     if (isDrawingFreehand && mode === 'draw') {
-      if (buttons !== 1) { commitFreehandRoi(freehandPoints); return; }
-      const last = freehandPoints[freehandPoints.length - 1];
-      // skip near-duplicate points (in unzoomed image space) so the point list stays manageable
-      const minStep = 1.5 / (view.scale || 1);
-      if (!last || Math.hypot(pos.x - last.x, pos.y - last.y) >= minStep) {
-        freehandPoints.push(pos);
-      }
+      if (buttons !== 1) return;
+      cancelPendingFreehandCommit();
+      addFreehandPoint(pos);
       drawAll(); drawFreehandPreview(freehandPoints);
       return;
     }
@@ -2324,7 +2467,9 @@ HTML_PAGE = """<!DOCTYPE html>
       dayCanvas.style.cursor = cur; biolumCanvas.style.cursor = cur; return;
     }
     if (isDrawingFreehand && mode === 'draw') {
-      commitFreehandRoi(freehandPoints);
+      addFreehandPoint(pos);
+      drawAll(); drawFreehandPreview(freehandPoints);
+      scheduleFreehandCommit();
     } else if (isDrawing && mode === 'draw') {
       commitRoi(shiftKey ? constrainSquare(drawStart, pos) : pos);
     } else if ((mode === 'move' || mode === 'resize') && dragRoiRef) {
@@ -2340,6 +2485,63 @@ HTML_PAGE = """<!DOCTYPE html>
   // outside both canvases (easy to trigger when zoomed in — a small screen movement
   // covers a lot of image space) can still be resolved to the right coordinate space.
   let activeDragCanvas = null;
+  let activePointerId = null;
+
+  function pointerDragButton(e) {
+    if (e.buttons !== undefined && (e.buttons & 1)) return 1;
+    if (e.pointerType === 'pen' && e.pressure > 0) return 1;
+    if (e.pointerType === 'touch' && e.type !== 'pointerup' && e.type !== 'pointercancel') return 1;
+    return 0;
+  }
+
+  function pointerCanvasPos(canvasName, e) {
+    const canvas = canvasName === 'day' ? dayCanvas : biolumCanvas;
+    const raw = canvasPos(canvas, e);
+    return {
+      canvas,
+      raw,
+      day: canvasName === 'day' ? raw : biolumToDay(raw)
+    };
+  }
+
+  function roiPointerDown(canvasName, e) {
+    if (e.pointerType === 'mouse' || e.isPrimary === false || e.button !== 0) return;
+    e.preventDefault();
+    activeDragCanvas = canvasName;
+    activePointerId = e.pointerId;
+    const p = pointerCanvasPos(canvasName, e);
+    if (p.canvas.setPointerCapture) p.canvas.setPointerCapture(e.pointerId);
+    roiMouseDown(p.day, p.raw);
+  }
+
+  function roiPointerMove(canvasName, e) {
+    if (e.pointerType === 'mouse' || activePointerId !== e.pointerId) return;
+    e.preventDefault();
+    const p = pointerCanvasPos(canvasName, e);
+    roiMouseMove(p.day, p.raw, pointerDragButton(e), e.shiftKey);
+  }
+
+  function roiPointerUp(canvasName, e) {
+    if (e.pointerType === 'mouse' || activePointerId !== e.pointerId) return;
+    e.preventDefault();
+    const p = pointerCanvasPos(canvasName, e);
+    if (p.canvas.releasePointerCapture) {
+      try { p.canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+    roiMouseUp(p.day, e.shiftKey);
+    activeDragCanvas = null;
+    activePointerId = null;
+  }
+
+  dayCanvas.addEventListener('pointerdown', e => roiPointerDown('day', e), {passive: false});
+  dayCanvas.addEventListener('pointermove', e => roiPointerMove('day', e), {passive: false});
+  dayCanvas.addEventListener('pointerup', e => roiPointerUp('day', e), {passive: false});
+  dayCanvas.addEventListener('pointercancel', e => roiPointerUp('day', e), {passive: false});
+
+  biolumCanvas.addEventListener('pointerdown', e => roiPointerDown('biolum', e), {passive: false});
+  biolumCanvas.addEventListener('pointermove', e => roiPointerMove('biolum', e), {passive: false});
+  biolumCanvas.addEventListener('pointerup', e => roiPointerUp('biolum', e), {passive: false});
+  biolumCanvas.addEventListener('pointercancel', e => roiPointerUp('biolum', e), {passive: false});
 
   // day canvas events
   dayCanvas.addEventListener('mousedown', e => {
@@ -2499,15 +2701,17 @@ HTML_PAGE = """<!DOCTYPE html>
       ctx.strokeRect(x, y, w, h);
       ctx.fillRect(x, y, w, h);
     }
-    ctx.fillStyle = color;
-    ctx.font = '500 11px IBM Plex Mono';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.lineWidth = 1.4 / zf;
-    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-    ctx.strokeText(label, x + w / 2, y + h / 2);
-    ctx.fillStyle = color + 'dd';
-    ctx.fillText(label, x + w / 2, y + h / 2);
+    if (showRoiLabels) {
+      ctx.fillStyle = color;
+      ctx.font = '500 11px IBM Plex Mono';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 1.4 / zf;
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.strokeText(label, x + w / 2, y + h / 2);
+      ctx.fillStyle = color + 'dd';
+      ctx.fillText(label, x + w / 2, y + h / 2);
+    }
     ctx.textAlign = 'start';
     ctx.textBaseline = 'alphabetic';
   }
@@ -2810,6 +3014,66 @@ HTML_PAGE = """<!DOCTYPE html>
     renderTable(measurements);
   }
 
+  function renameRowsFromMeasurements(data) {
+    const rows = new Map();
+    data.forEach(row => {
+      const key = row.roi_index !== undefined
+        ? 'idx:' + row.roi_index
+        : `${row.roi_type || 'roi'}:${row.roi_number || ''}:${row.roi_label || ''}`;
+      if (!rows.has(key)) {
+        rows.set(key, {
+          ...row,
+          samples: new Set(),
+          frames: new Set(),
+          rowCount: 0,
+        });
+      }
+      const out = rows.get(key);
+      out.rowCount += 1;
+      if (row.sample_name) out.samples.add(row.sample_name);
+      if (row.frame_number !== undefined && row.frame_number !== null) out.frames.add(Number(row.frame_number));
+    });
+    return [...rows.values()].map(row => {
+      const frames = [...row.frames].filter(v => isFinite(v)).sort((a, b) => a - b);
+      let frameSummary = '-';
+      if (frames.length === 1) frameSummary = String(frames[0]);
+      else if (frames.length > 1) frameSummary = `${frames[0]}-${frames[frames.length - 1]} (${frames.length})`;
+      return {
+        ...row,
+        sampleSummary: [...row.samples].join(', ') || row.sample_name || '-',
+        frameSummary,
+      };
+    });
+  }
+
+  function renderRenameTable(data, wrap, esc, fmtVal) {
+    const rows = renameRowsFromMeasurements(data);
+    wrap.innerHTML = `
+      <table>
+        <thead><tr><th style="min-width:28px;text-align:center">#</th><th>ROI Name</th><th>Type</th><th>Sample</th><th>Frames</th><th>Rows</th><th>Area (px)</th></tr></thead>
+        <tbody>
+          ${rows.map(row => {
+            const isB = row.roi_type === 'bckg';
+            const rowCls = isB ? ' class="bckg-row"' : '';
+            const roiIndex = Number(row.roi_index);
+            const labelValue = row.roi_label || (Number.isInteger(roiIndex) && rois[roiIndex] ? getRoiTableLabel(rois[roiIndex], roiIndex) : '');
+            const labelCell = (!isB && Number.isInteger(roiIndex))
+              ? `<input type="text" value="${esc(labelValue)}" data-roi-index="${roiIndex}" style="font-family:var(--mono);font-size:11px;background:transparent;border:1px solid var(--border2);color:var(--text);border-radius:2px;padding:2px 5px;width:140px;" oninput="renameRoiLabel(${roiIndex}, this.value)">`
+              : esc(fmtVal(labelValue));
+            return `<tr${rowCls}>
+              <td style="text-align:center;color:var(--muted);font-size:10px">${esc(row.roi_number ?? '')}</td>
+              <td>${labelCell}</td>
+              <td>${esc(isB ? 'Bckg' : 'ROI')}</td>
+              <td>${esc(row.sampleSummary)}</td>
+              <td>${esc(row.frameSummary)}</td>
+              <td>${esc(row.rowCount)}</td>
+              <td>${esc(fmtVal(row.area_px))}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }
+
   function renderTable(data) {
     if (!data.length) return;
     const wrap = document.getElementById('results-table-wrap');
@@ -2837,6 +3101,10 @@ HTML_PAGE = """<!DOCTYPE html>
       if (typeof v === 'number') return v.toLocaleString(undefined, {maximumFractionDigits: 1});
       return v;
     };
+    if (renameMode) {
+      renderRenameTable(data, wrap, esc, fmtVal);
+      return;
+    }
     const roiHeader = renameMode ? 'ROI Name' : 'ROI';
     const sampleHeader = renameMode ? '' : '<th>Sample</th>';
     wrap.innerHTML = `
@@ -2880,12 +3148,11 @@ HTML_PAGE = """<!DOCTYPE html>
     });
   }
 
-  function renameMeasurement(idx, newLabel) {
-    const m = measurements[idx];
-    if (!m || m.roi_type === 'bckg') return;
-    const roiIndex = m.roi_index;
+  function renameRoiLabel(roiIndex, newLabel) {
+    roiIndex = Number(roiIndex);
+    if (!Number.isInteger(roiIndex)) return;
     const cleanLabel = newLabel.trim();
-    if (roiIndex !== undefined && rois[roiIndex]) {
+    if (rois[roiIndex]) {
       rois[roiIndex].label = cleanLabel;
     }
     measurements.forEach(row => {
@@ -2897,12 +3164,15 @@ HTML_PAGE = """<!DOCTYPE html>
         }
       }
     });
-    if (roiIndex === undefined) {
-      m.roi_label = cleanLabel;
-    }
     drawAll();
     renderSummary();
     scheduleRoiAutosave();
+  }
+
+  function renameMeasurement(idx, newLabel) {
+    const m = measurements[idx];
+    if (!m || m.roi_type === 'bckg') return;
+    renameRoiLabel(m.roi_index, newLabel);
   }
 
   // ── save ──
@@ -3248,13 +3518,26 @@ HTML_PAGE = """<!DOCTYPE html>
     if (updated) updated.value = summarySampleOrder[nextIdx];
   }
   const SAMPLE_PALETTE = [
-    '#e7c84b','#5bd6c6','#ff8b72','#8fb8ff','#d59bff',
-    '#74d36f','#ffb45c','#f27bb2','#4af0c4','#ff6b6b',
-    '#6bcfff','#c9e45b','#ff9de2','#a8edaa','#ffcc80',
-    '#80deea','#ef9a9a','#ce93d8','#90caf9','#bcaaa4',
-    '#ffe082','#80cbc4','#ffab91','#b0bec5','#a5d6a7',
+    '#e6b800','#00b7c7','#e4572e','#3d7eff','#b245d6',
+    '#1fa84f','#ff7f00','#d81b60','#00a676','#c1121f',
+    '#0077b6','#7a9a01','#b5179e','#588157','#8d6e00',
+    '#00838f','#c62828','#6a1b9a','#1565c0','#6d4c41',
+    '#b58900','#00695c','#bf360c','#455a64','#2e7d32',
   ];
-  function sampleColor(i) { return SAMPLE_PALETTE[i % SAMPLE_PALETTE.length]; }
+  function hslToHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return '#' + [f(0), f(8), f(4)].map(v => Math.round(255 * v).toString(16).padStart(2, '0')).join('');
+  }
+  function sampleColor(i) {
+    if (i < SAMPLE_PALETTE.length) return SAMPLE_PALETTE[i];
+    const hue = (i * 137.508 + 23) % 360;
+    const sat = [88, 72, 96, 64][i % 4];
+    const light = [50, 62, 42, 70][Math.floor(i / 4) % 4];
+    return hslToHex(hue, sat, light);
+  }
   function timeSeriesColor(i) { return sampleColor(i); }
 
   function useBackgroundSubtracted() {
@@ -3455,7 +3738,10 @@ HTML_PAGE = """<!DOCTYPE html>
     const gap = 16;
     const n = SUMMARY_CHANNELS.length;
     const canvasW = Math.floor((plotsDiv.clientWidth  - gap * (n - 1)) / n) || 400;
-    const canvasH = plotsDiv.clientHeight || 500;
+    const baseCanvasH = plotsDiv.clientHeight || 500;
+    const legendRowsEstimate = Math.ceil(groups.length / Math.max(1, Math.floor(Math.max(120, canvasW - 60) / 110)));
+    const denseLegendExtra = useTimeSeries ? Math.min(320, Math.max(0, legendRowsEstimate - 3) * 13) : 0;
+    const canvasH = Math.max(baseCanvasH, 420 + denseLegendExtra);
     SUMMARY_CHANNELS.forEach(ch => {
       const canvas = document.getElementById(ch.id);
       canvas.width  = canvasW;
@@ -3475,7 +3761,7 @@ HTML_PAGE = """<!DOCTYPE html>
     const ratioWrap = document.getElementById('summary-ratio-plot');
     if (showRatio && ratioCanvas && ratioWrap) {
       const ratioW = canvasW;
-      const ratioH = ratioWrap.clientHeight || 260;
+      const ratioH = Math.max(ratioWrap.clientHeight || 260, 300 + denseLegendExtra);
       ratioCanvas.width = ratioW;
       ratioCanvas.height = ratioH;
       ratioCanvas.style.width = ratioW + 'px';
@@ -3731,7 +4017,44 @@ HTML_PAGE = """<!DOCTYPE html>
       maxLabelW = Math.max(maxLabelW, ctx.measureText(fmtVal(v)).width);
     }
 
-    const mg = {top: 86, right: 20, bottom: 56, left: Math.ceil(maxLabelW) + 20};
+    const leftMargin = Math.ceil(maxLabelW) + 20;
+    const rightMargin = 20;
+
+    ctx.font = '9px IBM Plex Mono';
+    const legendRowH = 13;
+    const legendGap = 10;
+    const legendMaxW = Math.max(80, W - leftMargin - rightMargin);
+    const maxLegendRows = Math.max(2, Math.floor(Math.min(H * 0.35, Math.max(30, H - 190)) / legendRowH));
+    const legendLabel = name => name.length > 16 ? name.slice(0, 15) + '...' : name;
+    const makeLegendRows = items => {
+      const rows = [[]];
+      let rowW = 0;
+      items.forEach(item => {
+        const label = item.more ? item.label : legendLabel(item.name);
+        const w = Math.min(132, ctx.measureText(label).width + 30);
+        if (rows[rows.length - 1].length && rowW + w > legendMaxW) {
+          rows.push([]);
+          rowW = 0;
+        }
+        rows[rows.length - 1].push({...item, label, w});
+        rowW += w + legendGap;
+      });
+      return rows;
+    };
+    let legendItems = seriesNames.map((name, i) => ({name, i}));
+    let legendRows = makeLegendRows(legendItems);
+    if (legendRows.length > maxLegendRows) {
+      let visible = [...legendItems];
+      while (visible.length > 0) {
+        const hidden = legendItems.length - visible.length;
+        const items = visible.concat(hidden ? [{more: true, label: '+' + hidden + ' more'}] : []);
+        legendRows = makeLegendRows(items);
+        if (legendRows.length <= maxLegendRows) break;
+        visible.pop();
+      }
+    }
+    const legendHeight = legendRows.length * legendRowH;
+    const mg = {top: 44 + legendHeight + 12, right: rightMargin, bottom: 56, left: leftMargin};
     const pw = W - mg.left - mg.right;
     const ph = H - mg.top - mg.bottom;
     const toX = v => mg.left + (v - xMin) / (xMax - xMin) * pw;
@@ -3742,28 +4065,28 @@ HTML_PAGE = """<!DOCTYPE html>
     ctx.textAlign = 'center';
     ctx.fillText(title + ' over time', W / 2, 26);
 
-    const legend = seriesNames.slice(0, 6);
     ctx.font = '9px IBM Plex Mono';
     ctx.textAlign = 'left';
-    let legendX = mg.left;
-    let legendY = 44;
-    legend.forEach((name, i) => {
-      const shortName = name.length > 18 ? name.slice(0, 17) + '...' : name;
-      const itemW = Math.min(150, ctx.measureText(shortName).width + 30);
-      if (legendX + itemW > W - mg.right) {
-        legendX = mg.left;
-        legendY += 12;
-      }
-      const lineCol = timeSeriesColor(i);
-      ctx.strokeStyle = lineCol;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.moveTo(legendX, legendY - 3);
-      ctx.lineTo(legendX + 14, legendY - 3);
-      ctx.stroke();
-      ctx.fillStyle = lineCol;
-      ctx.fillText(shortName, legendX + 18, legendY);
-      legendX += itemW;
+    legendRows.forEach((row, ri) => {
+      let legendX = mg.left;
+      const legendY = 44 + ri * legendRowH;
+      row.forEach(item => {
+        if (item.more) {
+          ctx.fillStyle = isLight ? '#666666' : '#7090a8';
+          ctx.fillText(item.label, legendX, legendY);
+        } else {
+          const lineCol = timeSeriesColor(item.i);
+          ctx.strokeStyle = lineCol;
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(legendX, legendY - 3);
+          ctx.lineTo(legendX + 14, legendY - 3);
+          ctx.stroke();
+          ctx.fillStyle = lineCol;
+          ctx.fillText(item.label, legendX + 18, legendY);
+        }
+        legendX += item.w + legendGap;
+      });
     });
 
     for (let t = 0; t <= 5; t++) {
@@ -3830,7 +4153,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (!pts.length) return;
       const lineCol = timeSeriesColor(si);
       ctx.strokeStyle = lineCol;
-      ctx.lineWidth = 1.8;
+      ctx.lineWidth = seriesNames.length > 18 ? 1.35 : 1.8;
       ctx.beginPath();
       pts.forEach((p, pi) => {
         const x = toX(p.elapsed_min);
@@ -3841,9 +4164,10 @@ HTML_PAGE = """<!DOCTYPE html>
       ctx.stroke();
       ctx.save();
       ctx.globalAlpha = isLight ? 0.42 : 0.55;
+      const pointR = seriesNames.length > 24 ? 2.6 : (seriesNames.length > 14 ? 3.2 : 4.2);
       pts.forEach(p => {
         ctx.beginPath();
-        ctx.arc(toX(p.elapsed_min), toY(p.value), 4.2, 0, Math.PI * 2);
+        ctx.arc(toX(p.elapsed_min), toY(p.value), pointR, 0, Math.PI * 2);
         ctx.fillStyle = lineCol;
         ctx.fill();
       });
@@ -3939,22 +4263,42 @@ HTML_PAGE = """<!DOCTYPE html>
     const dW = dayCanvas.width, dH = dayCanvas.height;
     const bW = biolumCanvas.width, bH = biolumCanvas.height;
     const gap = 4;
-    const W = (dW||0) + (bW||0) + (dW && bW ? gap : 0);
-    const H = Math.max(dH||0, bH||0);
+    const both = !!(dayImg && biolumImg);
+    const slotW = both ? Math.max(dW || 0, bW || 0, 400) : (dW || bW || 800);
+    const slotH = both ? Math.max(dH || 0, bH || 0, 300) : (dH || bH || 600);
+    const W = both ? slotW * 2 + gap : slotW;
+    const H = slotH;
     const off = document.createElement('canvas');
-    off.width = W||800; off.height = H||600;
+    off.width = W; off.height = H;
     const ctx = off.getContext('2d');
     ctx.fillStyle = '#06090d'; ctx.fillRect(0, 0, off.width, off.height);
 
-    if (dayImg && dW) {
-      ctx.drawImage(dayImg, 0, 0, dW, dH);
-      ctx.save(); drawRoisOnCtx(ctx, 1, 1); ctx.restore();
+    const fitIntoSlot = (srcW, srcH, slotX) => {
+      const scale = Math.min(slotW / srcW, slotH / srcH);
+      const w = Math.max(1, Math.round(srcW * scale));
+      const h = Math.max(1, Math.round(srcH * scale));
+      return {x: slotX + Math.round((slotW - w) / 2), y: Math.round((slotH - h) / 2), w, h};
+    };
+
+    let dayRect = null;
+    if (dayImg && dW && dH) {
+      dayRect = fitIntoSlot(dW, dH, 0);
+      ctx.drawImage(dayImg, dayRect.x, dayRect.y, dayRect.w, dayRect.h);
+      ctx.save();
+      ctx.translate(dayRect.x, dayRect.y);
+      drawRoisOnCtx(ctx, dayRect.w / dW, dayRect.h / dH);
+      ctx.restore();
     }
-    const bx = (dW||0) + (dW && bW ? gap : 0);
-    if (biolumImg && bW) {
-      ctx.drawImage(biolumImg, bx, 0, bW, bH);
-      ctx.save(); ctx.translate(bx, 0);
-      drawRoisOnCtx(ctx, dW ? bW/dW : 1, dH ? bH/dH : 1);
+    const bx = both ? slotW + gap : 0;
+    let biolumRect = null;
+    if (biolumImg && bW && bH) {
+      biolumRect = fitIntoSlot(bW, bH, bx);
+      ctx.drawImage(biolumImg, biolumRect.x, biolumRect.y, biolumRect.w, biolumRect.h);
+      ctx.save();
+      ctx.translate(biolumRect.x, biolumRect.y);
+      const refW = dW || bW;
+      const refH = dH || bH;
+      drawRoisOnCtx(ctx, biolumRect.w / refW, biolumRect.h / refH);
       ctx.restore();
     }
 
@@ -3964,8 +4308,8 @@ HTML_PAGE = """<!DOCTYPE html>
       ctx.fillStyle = 'rgba(6,9,13,0.75)'; ctx.fillRect(x, y, tw+12, 18);
       ctx.fillStyle = '#4af0c4'; ctx.fillText(text, x+6, y+13);
     };
-    if (dayImg && dW)    addLabel('DAY',    6,    6);
-    if (biolumImg && bW) addLabel('BIOLUM', bx+6, 6);
+    if (dayRect)    addLabel('DAY',    dayRect.x + 6,    dayRect.y + 6);
+    if (biolumRect) addLabel('BIOLUM', biolumRect.x + 6, biolumRect.y + 6);
 
     return off.toDataURL('image/png');
   }

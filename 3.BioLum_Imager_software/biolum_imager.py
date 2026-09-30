@@ -904,6 +904,20 @@ HTML = """
 
     .tab-content { display: none; height: calc(100vh - 44px); }
     .tab-content.active { display: flex; }
+    .storage-warning {
+      display: none;
+      min-height: 40px;
+      box-sizing: border-box;
+      align-items: center;
+      padding: 8px 20px;
+      background: rgba(240,168,74,0.12);
+      border-bottom: 1px solid var(--amber);
+      color: var(--amber);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .storage-warning.visible { display: flex; }
+    body.storage-low .tab-content { height: calc(100vh - 84px); }
 
     /* ── CAPTURE TAB layout ── */
     #tab-capture {
@@ -1563,6 +1577,8 @@ HTML = """
   </div>
 </div>
 
+<div class="storage-warning" id="storage-warning" role="status" aria-live="polite"></div>
+
 <!-- ══ CAPTURE TAB ══ -->
 <div class="tab-content active" id="tab-capture">
 
@@ -1937,6 +1953,22 @@ HTML = """
   fetch('/netinfo').then(r=>r.json()).then(d => {
     document.getElementById('net-ip').textContent = d.ip;
   });
+
+  async function updateStorageWarning() {
+    const warning = document.getElementById('storage-warning');
+    try {
+      const response = await fetch('/storage_status');
+      const storage = await response.json();
+      const isLow = storage.free_percent < 10;
+      warning.textContent = isLow
+        ? `Low microSD storage: ${storage.free_percent}% free (${storage.free_gb} GB of ${storage.total_gb} GB).`
+        : '';
+      warning.classList.toggle('visible', isLow);
+      document.body.classList.toggle('storage-low', isLow);
+    } catch (e) {}
+  }
+  updateStorageWarning();
+  setInterval(updateStorageWarning, 60000);
 
   // ── LED ──
   async function toggleLED() {
@@ -3102,6 +3134,16 @@ def index():
 def netinfo():
     ip = get_pi_ip()
     return jsonify({"ip": ip if ip != "unknown" else "10.42.0.1"})
+
+@app.route("/storage_status")
+def storage_status():
+    usage = shutil.disk_usage(BASE_DIR if BASE_DIR.exists() else BASE_DIR.parent)
+    free_percent = usage.free / usage.total * 100
+    return jsonify({
+        "free_percent": round(free_percent, 1),
+        "free_gb": round(usage.free / (1024 ** 3), 1),
+        "total_gb": round(usage.total / (1024 ** 3), 1),
+    })
 
 @app.route("/stream")
 def stream():
