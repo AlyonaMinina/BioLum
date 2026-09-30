@@ -2115,7 +2115,7 @@ HTML = """
 
       if (state.kind === 'timelapse') {
         const tl = state.timelapse || {};
-        tlLastFrame = tl.frame || 0;
+        tlLastFrame = tl.next_at > 0 ? (tl.frame || 0) : Math.max(0, (tl.frame || 0) - 1);
         updateTimelapseStack(tl.frames || [], tl.total || 0);
         document.getElementById('tl-status').style.display = 'flex';
         document.getElementById('tl-frame-info').textContent =
@@ -2128,7 +2128,7 @@ HTML = """
         } else {
           document.getElementById('tl-next-info').textContent = 'Capturing...';
         }
-        pollLog(true, false, exp);
+        pollLog(true, false, exp, true);
         pollTlStatus(exp);
       } else {
         if (state.phase === 'day') document.getElementById('preview-label').textContent = 'DAY CAPTURE';
@@ -2276,6 +2276,7 @@ HTML = """
     } catch(e) {}
     // clean up UI
     if (countdownInterval) clearInterval(countdownInterval);
+    if (downloadInterval) clearInterval(downloadInterval);
     if (shutterPollTimer) clearInterval(shutterPollTimer);
     if (logTimer) clearInterval(logTimer);
     stopTlStatus();
@@ -2291,24 +2292,29 @@ HTML = """
   // ── countdown ──
   let countdownInterval = null;
   let shutterPollTimer  = null;
+  let downloadInterval  = null;
 
   // Poll server until shutter opens, then start countdown
-  async function waitForShutterAndCountdown(totalSeconds, label) {
+  async function waitForShutterAndCountdown(totalSeconds, label, downloadLabel) {
     if (shutterPollTimer) clearInterval(shutterPollTimer);
+    if (countdownInterval) clearInterval(countdownInterval);
+    if (downloadInterval) clearInterval(downloadInterval);
+    document.getElementById('countdown-wrap').classList.remove('visible');
     shutterPollTimer = setInterval(async () => {
       try {
         const r = await fetch('/shutter_status');
         const d = await r.json();
         if (d.open) {
           clearInterval(shutterPollTimer);
-          startCountdown(totalSeconds, label);
+          startCountdown(totalSeconds, label, downloadLabel);
         }
       } catch(e) {}
     }, 300);
   }
 
-  function startCountdown(totalSeconds, label) {
+  function startCountdown(totalSeconds, label, downloadLabel) {
     if (countdownInterval) clearInterval(countdownInterval);
+    if (downloadInterval) clearInterval(downloadInterval);
     const wrap = document.getElementById('countdown-wrap');
     const num  = document.getElementById('countdown-num');
     const bar  = document.getElementById('countdown-bar');
@@ -2332,18 +2338,19 @@ HTML = """
 
       if (now >= endTime) {
         clearInterval(countdownInterval);
-        lbl.textContent = 'Downloading file at the pace of Nikon Camera, please be patient';
+        lbl.textContent = downloadLabel || 'Downloading file at the pace of Nikon Camera, please be patient';
         const bufWait = totalSeconds + 10;
         const bufEnd = Date.now() + bufWait * 1000;
         bar.style.transform = 'scaleX(1)';
-        const bufInterval = setInterval(() => {
+        downloadInterval = setInterval(() => {
           const bufNow = Date.now();
           const bufRemaining = Math.max(0, Math.ceil((bufEnd - bufNow) / 1000));
           const bufFrac = (bufEnd - bufNow) / (bufWait * 1000);
           bar.style.transform = `scaleX(${Math.max(0, bufFrac)})`;
           num.textContent = bufRemaining + 's';
           if (bufNow >= bufEnd) {
-            clearInterval(bufInterval);
+            clearInterval(downloadInterval);
+            downloadInterval = null;
             wrap.classList.remove('visible');
           }
         }, 250);  // update 4x/sec for smooth bar
@@ -2475,7 +2482,7 @@ HTML = """
     if (shouldFollow) body.scrollTop = body.scrollHeight;
   }
 
-  function pollLog(hasBiolum, isSequence, biolumExp) {
+  function pollLog(hasBiolum, isSequence, biolumExp, isTimelapse = false) {
     if (logTimer) clearInterval(logTimer);
     let dayShown = false;
     let countdownStarted = false;
@@ -2535,7 +2542,7 @@ HTML = """
       }
 
       // show loading message after shutter closes (standalone biolum)
-      if (!isSequence && hasBiolum && data.lines &&
+      if (!isTimelapse && !isSequence && hasBiolum && data.lines &&
           data.lines.some(l => l.trim() === 'SHUTTER_CLOSED')) {
         document.getElementById('preview-label').textContent = 'LOADING BIOLUM PHOTO...';
       }
@@ -2544,6 +2551,7 @@ HTML = """
         clearInterval(logTimer);
         setBusy(false);
         if (countdownInterval) clearInterval(countdownInterval);
+        if (downloadInterval) clearInterval(downloadInterval);
         if (shutterPollTimer) clearInterval(shutterPollTimer);
         document.getElementById('countdown-wrap').classList.remove('visible');
         stopTlStatus();
@@ -3037,7 +3045,7 @@ HTML = """
     });
 
     const exp = parseInt(document.getElementById('biolum-exp').value);
-    pollLog(true, false, exp);
+    pollLog(true, false, exp, true);
     pollTlStatus(exp);
   }
 
@@ -3062,7 +3070,11 @@ HTML = """
           // new frame started — restart shutter countdown
           if (d.frame > tlLastFrame) {
             tlLastFrame = d.frame;
-            waitForShutterAndCountdown(exp, 'Biolum Exposure');
+            waitForShutterAndCountdown(
+              exp,
+              `Frame ${d.frame} exposure`,
+              `Frame ${d.frame} downloading`
+            );
           }
 
           if (d.next_at > 0) {
@@ -3070,8 +3082,17 @@ HTML = """
             const m = Math.floor(secs / 60);
             const s = String(secs % 60).padStart(2, '0');
             document.getElementById('tl-next-info').textContent = `Next in ${m}:${s}`;
+            document.getElementById('preview-label').textContent =
+              `WAITING FOR FRAME ${d.frame + 1}/${d.total} · ${m}:${s}`;
           } else {
             document.getElementById('tl-next-info').textContent = 'Capturing...';
+            const stageLabels = {
+              preparing: 'PREPARING',
+              exposure: 'EXPOSING',
+              downloading: 'DOWNLOADING',
+            };
+            document.getElementById('preview-label').textContent =
+              `FRAME ${d.frame}/${d.total} · ${stageLabels[d.stage] || 'PREPARING'}`;
           }
         }
       } catch(e) {}
@@ -3251,11 +3272,25 @@ def cap_timelapse():
 def timelapse_status():
     with _capture_lock:
         frames = list(_timelapse_frames)
+        lines = list(_capture_log)
+    stage = "preparing"
+    frame_start = next(
+        (idx for idx in range(len(lines) - 1, -1, -1)
+         if lines[idx].startswith("▶ TIMELAPSE FRAME ")),
+        None,
+    )
+    if frame_start is not None:
+        frame_lines = lines[frame_start + 1:]
+        if "SHUTTER_CLOSED" in frame_lines:
+            stage = "downloading"
+        elif "SHUTTER_OPEN" in frame_lines:
+            stage = "exposure"
     return jsonify({
         "frame": _timelapse_frame,
         "total": _timelapse_total,
         "next_at": _timelapse_next_at,
         "frames": frames,
+        "stage": stage,
     })
 
 @app.route("/capture/both", methods=["POST"])
